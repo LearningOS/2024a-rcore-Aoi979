@@ -23,7 +23,10 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
-
+use crate::config::MAX_SYSCALL_NUM;
+use crate::mm::{MapPermission, PageTableEntry, VirtAddr, VirtPageNum};
+use crate::timer::get_time_ms;
+use crate::mm::address::{VPNRange};
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -79,6 +82,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.time = get_time_ms();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -140,6 +144,8 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            inner.tasks[current].time = get_time_ms() - inner.tasks[current].time;
+            inner.tasks[next].time = get_time_ms();
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +158,21 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+    fn get_syscall_times(&self) -> [u32;MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].task_syscall_times
+    }
+
+    fn get_current_task_running_time(&self) -> usize{
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].time
+    }
+
+    fn update_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_times[syscall_id] += 1;
     }
 }
 
@@ -201,4 +222,54 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+/// get syscall times
+pub fn get_syscall_times() -> [u32;MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_syscall_times()
+}
+
+/// get current task time
+pub fn get_current_task_running_time() -> usize {
+    TASK_MANAGER.get_current_task_running_time()
+}
+
+/// update syscall times
+pub fn update_syscall_times(syscall_id: usize) {
+    TASK_MANAGER.update_syscall_times(syscall_id);
+}
+
+///vpn to pte
+pub fn vpn2pte_curr_task(vpn: VirtPageNum) -> Option<PageTableEntry> {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    let task_id = inner.current_task;
+    inner.tasks[task_id].memory_set.translate(vpn)
+}
+///new map area
+pub fn new_map_area(start_ad: VirtAddr, end_ad: VirtAddr, map_permission: MapPermission) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let task_id = inner.current_task;
+    inner.tasks[task_id].memory_set.insert_framed_area(start_ad,end_ad,map_permission);
+}
+
+///unmap a area
+pub fn unmap_area(start: usize, len: usize) -> isize {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let task_id = inner.current_task;
+    let task = &mut inner.tasks[task_id];
+    let vpns = VPNRange::new(
+        VirtAddr::from(start).floor(),
+        VirtAddr::from(start + len).ceil(),
+    );
+
+    for vpn in vpns {
+        if let Some(pte) = task.memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+            task.memory_set.get_page_table().unmap(vpn);
+        } else {
+            return -1;
+        }
+    }
+    0
 }

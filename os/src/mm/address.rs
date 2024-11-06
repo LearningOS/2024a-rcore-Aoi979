@@ -142,6 +142,11 @@ impl PhysAddr {
     pub fn aligned(&self) -> bool {
         self.page_offset() == 0
     }
+    /// new pa from ppn and offset
+    pub fn from_ppn_and_offset(ppn: PhysPageNum, offset: usize) -> PhysAddr {
+        let addr = (ppn.0 << 12) | offset;
+        PhysAddr(addr)
+    }
 }
 impl From<PhysAddr> for PhysPageNum {
     fn from(v: PhysAddr) -> Self {
