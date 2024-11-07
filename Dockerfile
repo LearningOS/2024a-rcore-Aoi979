@@ -84,7 +84,7 @@ RUN cargo install cargo-binutils; \
 # 3. Cargo vendor
 WORKDIR ${HOME}
 COPY os/vendor ./os-vendor
-COPY user/vendor ./user-vendor
+COPY ci-user/user/vendor ./user-vendor
 
 # Ready to go
 WORKDIR ${HOME}
