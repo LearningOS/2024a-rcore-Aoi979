@@ -155,4 +155,14 @@ impl File for OSInode {
         }
         total_write_size
     }
+
+    fn get_inode_id(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.get_inode_id()
+    }
+
+    fn get_link_num(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        ROOT_INODE.get_inode_link_num(&inner.inode)
+    }
 }

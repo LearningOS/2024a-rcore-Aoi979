@@ -11,6 +11,10 @@ use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+use crate::config::MAX_SYSCALL_NUM;
+use crate::mm::{MapPermission, PageTableEntry, VirtAddr, VirtPageNum};
+use crate::mm::address::{VPNRange};
+use crate::timer::get_time_ms;
 
 /// Processor management structure
 pub struct Processor {
@@ -61,6 +65,7 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+            task_inner.running_time = get_time_ms() - task_inner.running_time;
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
@@ -108,4 +113,46 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+/// update syscall times
+pub fn update_syscall_times(id: usize) {
+    current_task().unwrap().inner_exclusive_access().task_syscall_times[id] += 1;
+}
+
+///new map area
+pub fn new_map_area(start_ad: VirtAddr, end_ad: VirtAddr, map_permission: MapPermission) {
+    current_task().unwrap().inner_exclusive_access().memory_set.insert_framed_area(start_ad, end_ad, map_permission);
+}
+// unmap area
+pub fn unmap_area(start: usize, len: usize) -> isize {
+    let binding = current_task().unwrap();
+    let mut task = binding.inner_exclusive_access();
+    let vpns = VPNRange::new(
+        VirtAddr::from(start).floor(),
+        VirtAddr::from(start + len).ceil(),
+    );
+
+    for vpn in vpns {
+        if let Some(pte) = task.memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+            task.memory_set.get_page_table().unmap(vpn);
+        } else {
+            return -1;
+        }
+    }
+    0
+}
+///get syscall times
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM]  {
+    current_task().unwrap().inner_exclusive_access().task_syscall_times
+}
+///get current task running time
+pub fn get_current_task_running_time() -> usize {
+    current_task().unwrap().inner_exclusive_access().running_time
+}
+///vpn to pte
+pub fn vpn2pte_curr_task(vpn: VirtPageNum) -> Option<PageTableEntry> {
+    current_task().unwrap().inner_exclusive_access().memory_set.translate(vpn)
 }

@@ -1,7 +1,8 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
-use crate::task::{current_task, current_user_token};
+use crate::fs::{open_file,  OpenFlags, Stat, StatMode, ROOT_INODE};
+use crate::mm::{translated_byte_buffer, translated_str, UserBuffer, VirtAddr};
+use crate::syscall::process::v2p_addr;
+use crate::task::{current_task, current_user_token, };
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
@@ -77,27 +78,55 @@ pub fn sys_close(fd: usize) -> isize {
 
 /// YOUR JOB: Implement fstat.
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let binding = current_task().unwrap();
+    let token = current_user_token();
+    let task_inner = binding.inner_exclusive_access();
+    let va = VirtAddr(_st as usize);
+    if let Some(file) = &task_inner.fd_table[_fd] {
+        if let Some(pa) = v2p_addr(va,token) {
+            let ino = file.get_inode_id() as u64;
+            let link_num = file.get_link_num() as u32;
+            let temp = pa.0 as *mut Stat;
+            unsafe {
+                (*temp).dev = 0;
+                (*temp).ino = ino;
+                (*temp).mode = StatMode::FILE;
+                (*temp).nlink = link_num;
+                (*temp).pad = [0;7];
+            }
+           return  0;
+        }else {
+            return -1;
+        }
+    }else {
+        return -1;
+    }
 }
+
 
 /// YOUR JOB: Implement linkat.
 pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+    let token = current_user_token();
+    let _old_name = translated_str(token, _old_name);
+    let _new_name = translated_str(token, _new_name);
+    if _old_name == _new_name {
+        return -1;
+    }
+    if let Some(_) = ROOT_INODE.link(_old_name.as_str(), _new_name.as_str()) {
+        return 0;
+    }
     -1
 }
 
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
+    let token = current_user_token();
+    let _name = translated_str(token, _name);
+    if let Some(inode) = ROOT_INODE.find(_name.as_str()) {
+        if ROOT_INODE.is_last(&inode) {
+            inode.clear();
+        }
+        return ROOT_INODE.unlink(_name.as_str());
+    }
     -1
 }

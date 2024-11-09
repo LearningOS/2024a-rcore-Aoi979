@@ -1,7 +1,4 @@
-use super::{
-    block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
-    EasyFileSystem, DIRENT_SZ,
-};
+use super::{block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType, EasyFileSystem, BLOCK_SZ, DIRENT_SZ};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -182,5 +179,111 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+
+    pub fn link(&self, old_name: &str, new_name: &str) -> Option<Arc<Inode>> {
+        let mut fs = self.fs.lock();
+        let op = |root_inode: &DiskInode| {
+            self.find_inode_id(old_name, root_inode)
+        };
+        if let Some(old_inode_id) = self.read_disk_inode(op) {
+            let new_inode_id = old_inode_id;
+            let (new_block_id, new_block_offset) = fs.get_disk_inode_pos(new_inode_id);
+            self.modify_disk_inode(|root_inode| {
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                self.increase_size(new_size as u32, root_inode, &mut fs);
+                let dirent = DirEntry::new(new_name, new_inode_id);
+                root_inode.write_at(
+                    file_count * DIRENT_SZ,
+                    dirent.as_bytes(),
+                    &self.block_device,
+                );
+            });
+            Some(Arc::new(Self::new(
+                new_block_id,
+                new_block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )))
+        }else {
+            None
+        }
+    }
+
+    pub fn unlink(&self, name: &str) ->isize {
+        let fs = self.fs.lock();
+        let op = |root_inode: &DiskInode| {
+            self.find_inode_id(name, root_inode)
+        };
+        if let Some(_) = self.read_disk_inode(op) {
+            self.modify_disk_inode(|root_inode| {
+                let mut temp = DirEntry::empty();
+                let mut foo = DirEntry::empty();
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                for i in 0..file_count {
+                    if root_inode.read_at(DIRENT_SZ * i, temp.as_bytes_mut(), &self.block_device) == DIRENT_SZ{
+                        if temp.name() == name {
+                            root_inode.read_at(DIRENT_SZ *(file_count - 1),foo.as_bytes_mut(), &self.block_device);
+                            root_inode.write_at(DIRENT_SZ * i, foo.as_bytes_mut(), &self.block_device);
+                            root_inode.size -= DIRENT_SZ as u32;
+                            break
+                        }
+                    }
+                }
+            });
+            0
+        }else {
+            -1
+        }
+
+    }
+    pub fn is_last(&self,inode: &Inode) -> bool {
+        let target_block_id = inode.block_id;
+        let target_block_offset = inode.block_offset;
+        let fs = self.fs.lock();
+        let mut num = 0;
+        self.read_disk_inode(|root_inode|{
+            let mut temp = DirEntry::empty();
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let (block_id,offset) = fs.get_disk_inode_pos(temp.inode_id());
+                if block_id as usize == target_block_id && offset as usize == target_block_offset{
+                    num += 1;
+                }
+
+            }
+        });
+        if num == 1 {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn get_inode_id(&self) -> usize{
+        let fs = self.fs.lock();
+        fs.get_inode_id(self.block_id as u32, self.block_offset as u32) as usize
+    }
+
+    pub fn get_inode_link_num(&self,inode: &Inode) -> usize{
+        let target_block_id = inode.block_id;
+        let target_block_offset = inode.block_offset;
+        let fs = self.fs.lock();
+        let mut num = 0;
+        self.read_disk_inode(|root_inode| {
+            let mut temp = DirEntry::empty();
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let bytes_read = root_inode.read_at(DIRENT_SZ * i, temp.as_bytes_mut(), &self.block_device);
+                if bytes_read != DIRENT_SZ {
+                    return;
+                }
+                let (block_id, offset) = fs.get_disk_inode_pos(temp.inode_id());
+                if block_id as usize == target_block_id && offset as usize == target_block_offset {
+                    num += 1;
+                }
+            }
+        });
+        num
     }
 }
