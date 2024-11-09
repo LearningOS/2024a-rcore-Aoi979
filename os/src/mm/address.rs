@@ -134,6 +134,11 @@ impl From<VirtPageNum> for VirtAddr {
     }
 }
 impl PhysAddr {
+    /// new pa from ppn and offset
+    pub fn from_ppn_and_offset(ppn: PhysPageNum, offset: usize) -> PhysAddr {
+        let addr = (ppn.0 << 12) | offset;
+        PhysAddr(addr)
+    }
     /// Get the (floor) physical page number
     pub fn floor(&self) -> PhysPageNum {
         PhysPageNum(self.0 / PAGE_SIZE)

@@ -8,6 +8,8 @@ use crate::{
     },
 };
 use alloc::{string::String, sync::Arc, vec::Vec};
+use crate::mm::{PhysAddr, VirtAddr};
+use crate::timer::get_time_us;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -156,18 +158,37 @@ pub fn sys_kill(pid: usize, signal: u32) -> isize {
         -1
     }
 }
-
+pub fn v2p_addr(virt_addr: VirtAddr, token: usize) -> Option<PhysAddr> {
+    let offset = virt_addr.page_offset();
+    let vpn = virt_addr.floor();
+    let ppn = crate::mm::page_table::PageTable::from_token(token).translate(vpn).map(|p|p.ppn());
+    if let Some(ppn) = ppn {
+        Some(PhysAddr::from_ppn_and_offset(ppn, offset))
+    }else {
+        None
+    }
+}
 /// get_time syscall
 ///
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().process.upgrade().unwrap().getpid()
-    );
-    -1
+    let us = get_time_us();
+    let va = VirtAddr(_ts as usize);
+    let token = current_user_token();
+    if let Some(pa) = v2p_addr(va, token) {
+        let temp = pa.0 as *mut TimeVal;
+        unsafe {
+            *temp = TimeVal{
+                sec: us / 1_000_000,
+                usec: us % 1_000_000,
+            };
+        }
+        0
+    }else {
+        -1
+    }
 }
 
 /// task_info syscall
